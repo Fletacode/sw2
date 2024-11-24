@@ -9,9 +9,9 @@
 #define _INTERVAL_SERIAL  20 // serial interval (unit: ms)
 
 // Servo adjustment
-#define _DUTY_NEU 1500
-#define _DUTY_MAX 2500
-#define _DUTY_MIN 500
+#define _DUTY_NEU 1800
+#define _DUTY_MAX 3000
+#define _DUTY_MIN 950
 
 #define _ADJ_RANGE 1000
 
@@ -69,6 +69,6 @@ void loop() {
     
     // output the read value to the serial port
     Serial.print("Min:500,DUTY:"); Serial.print(duty_adj);  
-    Serial.println(",Max:2500");
+    Serial.println(",Max:3000");
   }
 }

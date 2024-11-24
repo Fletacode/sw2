@@ -6,143 +6,156 @@
 #define PIN_IR    A0
 
 // Event interval parameters
-#define _INTERVAL_DIST    20 // distance sensor interval (unit: ms)
-#define _INTERVAL_SERVO   20 // servo interval (unit: ms)
-#define _INTERVAL_SERIAL  100 // serial interval (unit: ms)
+#define _INTERVAL_DIST    50 // distance sensor interval (unit: ms)
+#define _INTERVAL_SERVO   50 // servo interval (unit: ms)
+#define _INTERVAL_SERIAL  20 // serial interval (unit: ms)
 
 // EMA filter configuration for the IR distance sensor
 #define _EMA_ALPHA 0.2    // EMA weight of new sample (range: 0 to 1)
                           // Setting EMA to 1 effectively disables EMA filter.
 
 // Servo adjustment - Set _DUTY_MAX, _NEU, _MIN with your own numbers
-#define _DUTY_MAX 1800 // 2000
-#define _DUTY_NEU 2500 // 1500
-#define _DUTY_MIN 950 // 1000
+#define _DUTY_MAX 2800 // 2000
+#define _DUTY_NEU 1800 // 1500
+#define _DUTY_MIN 1000 // 1000
 
-#define _SERVO_ANGLE_DIFF  60  // Replace with |D - E| degree
-#define _SERVO_SPEED       55  // servo speed
-
-#define _BANGBANG_RANGE    400  // duty up and down for bangbang control
+#define _SERVO_ANGLE_DIFF  70   // Replace with |D - E| 50 - 120 degree
+#define _SERVO_SPEED       110   // servo speed 
 
 // Target Distance
-#define _DIST_TARGET    175 // Center of the rail (unit:mm)
+#define _DIST_TARGET    180 // Center of the rail (unit: mm)
+
+// PID parameters
+#define _KP  2    // proportional gain
+//#define _KD 0.0   // derivative gain
+//#define _KI 0.0   // integral gain
 
 // global variables
 
 Servo myservo;
+float dist_ema;   // Filtered distance
 
-float dist_ema;     // unit: mm
+// Event periods
+unsigned long last_sampling_time_dist, last_sampling_time_servo, last_sampling_time_serial; // unit: ms
+bool event_dist, event_servo, event_serial;
 
-int duty_change_per_interval; // maximum duty difference per interval
-int duty_target;    // Target duty
-int duty_current;      // Current duty
-int duty_adj;       // Level adjustment
+// Servo speed control
+int duty_change_per_interval;     // maximum duty difference per interval
 
-unsigned long last_sampling_time_dist;   // unit: msec
-unsigned long last_sampling_time_servo;  // unit: msec
-unsigned long last_sampling_time_serial; // unit: msec
+// Servo position
+int duty_target, duty_current;
 
-bool event_dist, event_servo, event_serial; // event triggered?
+int error_current;
+float pterm /*, dterm, iterm */;
 
 void setup()
 {
   // initialize GPIO pins
   pinMode(PIN_LED,OUTPUT);
+  
   myservo.attach(PIN_SERVO);
-
   duty_target = duty_current = _DUTY_NEU;
-  myservo.writeMicroseconds(duty_current);
+  myservo.writeMicroseconds(duty_current);    
 
+  // convert speed into duty change per interval.
+  duty_change_per_interval = 
+    (float)(_DUTY_MAX - _DUTY_MIN) * ((float)_SERVO_SPEED / _SERVO_ANGLE_DIFF) * (_INTERVAL_SERVO / 1000.0); 
+  
   // initialize serial port
   Serial.begin(1000000);  
-    
-  // convert angular speed into duty change per interval.
-  duty_change_per_interval = (float)(_DUTY_MAX - _DUTY_MIN) * ((float)_SERVO_SPEED / _SERVO_ANGLE_DIFF) * (_INTERVAL_SERVO / 1000.0); 
 }
-
+  
 void loop()
 {
   unsigned long time_curr = millis();
   
   // wait until next event time
   if (time_curr >= (last_sampling_time_dist + _INTERVAL_DIST)) {
-        last_sampling_time_dist += _INTERVAL_DIST;
-        event_dist = true;
+    last_sampling_time_dist += _INTERVAL_DIST;
+    event_dist = true;
   }
   if (time_curr >= (last_sampling_time_servo + _INTERVAL_SERVO)) {
-        last_sampling_time_servo += _INTERVAL_SERVO;
-        event_servo = true;
+    last_sampling_time_servo += _INTERVAL_SERVO;
+    event_servo = true;
   }
   if (time_curr >= (last_sampling_time_serial + _INTERVAL_SERIAL)) {
-        last_sampling_time_serial += _INTERVAL_SERIAL;
-        event_serial = true;
+    last_sampling_time_serial += _INTERVAL_SERIAL;
+    event_serial = true;
   }
-    
+
   if (event_dist) {
     float dist_filtered; // unit: mm
+    int control;
+    
     event_dist = false;
 
     // get a distance reading from the distance sensor
     dist_filtered = volt_to_distance(ir_sensor_filtered(10, 0.5, 0));
     dist_ema = _EMA_ALPHA * dist_filtered + (1.0 - _EMA_ALPHA) * dist_ema;
 
-    // bang bang control
-    if (dist_ema > _DIST_TARGET) {
-      duty_target = _DUTY_NEU - _BANGBANG_RANGE;
-      digitalWrite(PIN_LED, 0);
-    } else if (dist_ema < _DIST_TARGET) {
-      duty_target = _DUTY_NEU + _BANGBANG_RANGE;
+    // Update PID variables
+    error_current = _DIST_TARGET - dist_ema;
+    pterm = error_current * _KP;
+    
+    control = pterm /* + dterm + iterm */;
+    duty_target = _DUTY_NEU + control;
+
+    // Limit duty_target within the range of [_DUTY_MIN, _DUTY_MAX]
+    if (duty_target < _DUTY_MIN)
+      duty_target = _DUTY_MIN; // lower limit
+    if (duty_target > _DUTY_MAX)
+      duty_target = _DUTY_MAX; // upper limit 
+      
+    if (error_current > 0)
       digitalWrite(PIN_LED, 1);
-    }
+    else
+      digitalWrite(PIN_LED, 0);
   }
   
   if (event_servo) {
     event_servo = false;
      
-    // adjust duty_current toward duty_target by duty_change_per_interval
+    // adjust duty_curr toward duty_target by duty_change_per_interval
     if (duty_target > duty_current) {
       duty_current += duty_change_per_interval;
-      
-      if (duty_current > duty_target){
-          //duty_current = duty_target;
-      }
-    } else if (duty_target < duty_current) {
+      if (duty_current > duty_target)
+          duty_current = duty_target;
+    } else {
       duty_current -= duty_change_per_interval;
-      
-      if (duty_current < duty_target){
+      if (duty_current < duty_target)
         duty_current = duty_target;
-      }
     }
-    
-    // servo arm protection
-    if (duty_current < _DUTY_MIN)
-      duty_current = _DUTY_MIN;
-    else if (duty_current > _DUTY_MAX) 
-      duty_current = _DUTY_MAX;
 
-    // update servo position
     myservo.writeMicroseconds(duty_current);
   }
   
   if (event_serial) {
     event_serial = false;
-    
-    // output the read value to the serial port
-    Serial.print("TARGET:"); Serial.print(_DIST_TARGET);
-    Serial.print(",DIST:"); Serial.print(dist_ema);
-    Serial.print(",duty_target:"); Serial.print(duty_target);
-    Serial.print(",duty_current:"); Serial.println(duty_current);
-    //Serial.print("duty_change: "); Serial.println(duty_change_per_interval);
+
+    Serial.print("DIST:");
+    Serial.print(dist_ema);
+    Serial.print(",_DIST_TARGET:"),
+    Serial.print(_DIST_TARGET);
+    Serial.print(",ERROR:");
+    Serial.print(error_current);
+    Serial.print(",duty_target:");
+    Serial.print(duty_target);
+    Serial.print(",duty_current:");
+    Serial.print(duty_current);  
+    Serial.print(",("); 
+    Serial.print(duty_change_per_interval); 
+    Serial.print("),pterm:");
+    Serial.println(pterm);
   }
 }
 
 float volt_to_distance(int a_value)
 {
-  // Replace line into your own equation
-  return (6762.0 / (a_value - 9) - 4.0) * 10.0; 
-  //return 583 + (-1.96*a_value) + (2.13E-03 * a_value * a_value) + ( -7.83E-07 * (a_value*a_value*a_value)); 
-  //float volt = (float)a_value;
-  //return 270.0 - (0.2 * volt); // 선형화된 거리 계산
+  // Replace next line into your own equation
+   //return (6762.0 / (a_value - 9) - 4.0) * 10.0;
+   //return 583 + (-1.96*a_value) + (2.13E-03 * a_value * a_value) + ( -7.83E-07 * (a_value*a_value*a_value)); 
+   return 939 + (-4.64*a_value) + (8.43E-03* pow(a_value,2)) + (-5.51E-06 * pow(a_value,3));
+   
   //return ???;
 }
 
